@@ -1,4 +1,4 @@
-
+#![feature(abi_thiscall)]
 use libc;
 extern crate steamworks_sys as sys;
 #[macro_use]
@@ -33,6 +33,8 @@ mod remote_storage;
 pub use crate::remote_storage::*;
 mod ugc;
 pub use crate::ugc::*;
+mod gc;
+pub use crate::gc::*;
 
 use std::sync::{Arc, Mutex};
 use std::ffi::{CString, CStr};
@@ -44,6 +46,7 @@ use std::collections::HashMap;
 
 #[cfg(feature = "serde")]
 use serde::{Serialize, Deserialize};
+use std::os::raw::c_char;
 
 pub type SResult<T> = Result<T, SteamError>;
 
@@ -188,13 +191,13 @@ impl <M> SingleClient<M> where M: Manager {
     }
 }
 
-impl <Manager> Client<Manager> {
+impl <M> Client<M> where M: Manager {
     /// Registers the passed function as a callback for the
     /// given type.
     ///
     /// The callback will be run on the thread that `run_callbacks`
     /// is called when the event arrives.
-    pub fn register_callback<C, F>(&self, f: F) -> CallbackHandle<Manager>
+    pub fn register_callback<C, F>(&self, f: F) -> CallbackHandle<M>
         where C: Callback,
               F: FnMut(C) + 'static + Send
     {
@@ -203,8 +206,39 @@ impl <Manager> Client<Manager> {
         }
     }
 
+    /// Returns an accessor to the steam Game Coordinator interface
+    pub fn gc(&self) -> GC<M> {
+        unsafe {
+            // get HSteamPipe and HSteamUser for the current connection
+            let pipe = M::get_pipe();
+            let user = M::get_user();
+
+            // Grab the interface version constants
+            let steamclient_interface = sys::STEAMCLIENT_INTERFACE_VERSION as *const _ as *const c_char;
+            let gc_interface = sys::STEAMGAMECOORDINATOR_INTERFACE_VERSION as *const _  as *const c_char;
+
+            // Create an interface to ISteamClient
+            let steamclient = sys::SteamInternal_CreateInterface(steamclient_interface) as *mut sys::ISteamClient;
+            debug_assert!(!steamclient.is_null());
+
+            // Create an interface to IGameCoordinator (not exposed from the flat API, as it is 'technically' deprecated)
+            let gc = sys::SteamAPI_ISteamClient_GetISteamGenericInterface(
+                steamclient,
+                pipe,
+                user,
+                gc_interface as *const c_char
+            ) as *mut sys::ISteamGameCoordinator;
+            debug_assert!(!gc.is_null());
+
+            // Wrap it in our game coordinator wrapper
+            GC {
+                gc,
+                _inner: self.inner.clone()
+            }
+        }
+    }
     /// Returns an accessor to the steam utils interface
-    pub fn utils(&self) -> Utils<Manager> {
+    pub fn utils(&self) -> Utils<M> {
         unsafe {
             let utils = sys::SteamAPI_SteamUtils_v009();
             debug_assert!(!utils.is_null());
@@ -216,7 +250,7 @@ impl <Manager> Client<Manager> {
     }
 
     /// Returns an accessor to the steam matchmaking interface
-    pub fn matchmaking(&self) -> Matchmaking<Manager> {
+    pub fn matchmaking(&self) -> Matchmaking<M> {
         unsafe {
             let mm = sys::SteamAPI_SteamMatchmaking_v009();
             debug_assert!(!mm.is_null());
@@ -228,7 +262,7 @@ impl <Manager> Client<Manager> {
     }
 
     /// Returns an accessor to the steam networking interface
-    pub fn networking(&self) -> Networking<Manager> {
+    pub fn networking(&self) -> Networking<M> {
         unsafe {
             let net = sys::SteamAPI_SteamNetworking_v006();
             debug_assert!(!net.is_null());
@@ -240,7 +274,7 @@ impl <Manager> Client<Manager> {
     }
 
     /// Returns an accessor to the steam apps interface
-    pub fn apps(&self) -> Apps<Manager> {
+    pub fn apps(&self) -> Apps<M> {
         unsafe {
             let apps = sys::SteamAPI_SteamApps_v008();
             debug_assert!(!apps.is_null());
@@ -252,7 +286,7 @@ impl <Manager> Client<Manager> {
     }
 
     /// Returns an accessor to the steam friends interface
-    pub fn friends(&self) -> Friends<Manager> {
+    pub fn friends(&self) -> Friends<M> {
         unsafe {
             let friends = sys::SteamAPI_SteamFriends_v017();
             debug_assert!(!friends.is_null());
@@ -265,7 +299,7 @@ impl <Manager> Client<Manager> {
     }
 
     /// Returns an accessor to the steam user interface
-    pub fn user(&self) -> User<Manager> {
+    pub fn user(&self) -> User<M> {
         unsafe {
             let user = sys::SteamAPI_SteamUser_v020();
             debug_assert!(!user.is_null());
@@ -277,7 +311,7 @@ impl <Manager> Client<Manager> {
     }
 
     /// Returns an accessor to the steam user stats interface
-    pub fn user_stats(&self) -> UserStats<Manager> {
+    pub fn user_stats(&self) -> UserStats<M> {
         unsafe {
             let us = sys::SteamAPI_SteamUserStats_v011();
             debug_assert!(!us.is_null());
@@ -289,7 +323,7 @@ impl <Manager> Client<Manager> {
     }
 
     /// Returns an accessor to the steam remote storage interface
-    pub fn remote_storage(&self) -> RemoteStorage<Manager> {
+    pub fn remote_storage(&self) -> RemoteStorage<M> {
         unsafe {
             let rs = sys::SteamAPI_SteamRemoteStorage_v014();
             debug_assert!(!rs.is_null());
@@ -304,7 +338,7 @@ impl <Manager> Client<Manager> {
     }
 
     /// Returns an accessor to the steam UGC interface (steam workshop)
-    pub fn ugc(&self) -> UGC<Manager> {
+    pub fn ugc(&self) -> UGC<M> {
         unsafe {
             let ugc = sys::SteamAPI_SteamUGC_v014();
             debug_assert!(!ugc.is_null());
@@ -319,6 +353,7 @@ impl <Manager> Client<Manager> {
 /// Used to separate client and game server modes
 pub unsafe trait Manager {
     unsafe fn get_pipe() -> sys::HSteamPipe;
+    unsafe fn get_user() -> sys::HSteamUser;
 }
 
 /// Manages keeping the steam api active for clients
@@ -329,6 +364,9 @@ pub struct ClientManager {
 unsafe impl Manager for ClientManager {
     unsafe fn get_pipe() -> sys::HSteamPipe {
         sys::SteamAPI_GetHSteamPipe()
+    }
+    unsafe fn get_user() -> sys::HSteamUser {
+        sys::SteamAPI_GetHSteamUser()
     }
 }
 

@@ -10,9 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::fs::{self};
 
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let sdk_loc = env::var("STEAM_SDK_LOCATION")
-        .expect("STEAM_SDK_LOCATION must be set");
-    let sdk_loc = Path::new(&sdk_loc);
+    let sdk_loc = dunce::canonicalize("steamworks_sdk").expect("steamworks_sdk folder is missing");
 
     let triple = env::var("TARGET").unwrap();
     let mut lib = "steam_api";
@@ -40,7 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .header("src/fixes.hpp")
         .header(sdk_loc.join("public/steam/steam_api_flat.h").to_string_lossy())
         .header(sdk_loc.join("public/steam/steam_gameserver.h").to_string_lossy())
+        .header(sdk_loc.join("public/steam/isteamgamecoordinator.h").to_string_lossy())
         .clang_arg("-xc++")
+        .clang_arg("-std=c++11")
         .opaque_type("SteamTVRegion_t")
         .clang_arg(format!("-I{}", sdk_loc.join("public").display()))
         .rustfmt_bindings(true)
