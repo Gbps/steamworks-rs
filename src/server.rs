@@ -332,6 +332,9 @@ unsafe impl Manager for ServerManager {
     unsafe fn get_pipe() -> sys::HSteamPipe {
         sys::SteamGameServer_GetHSteamPipe()
     }
+    unsafe fn get_user() -> sys::HSteamUser {
+        sys::SteamGameServer_GetHSteamUser()
+    }
 }
 
 impl Drop for ServerManager {

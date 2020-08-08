@@ -5,6 +5,9 @@ use serial_test_derive::serial;
 
 use byteorder::{LittleEndian, WriteBytesExt};
 
+use std::sync::mpsc;
+use std::time::Duration;
+
 pub type GCResult<T> = Result<T, sys::EGCResults>;
 
 pub struct GC<Manager> {
@@ -148,16 +151,133 @@ impl <Manager> GC<Manager> {
     }
 }
 
-const CALLBACK_BASE_ID: i32 = 1700;
+/// Describes an entry in the message queue
+#[derive(Debug)]
+pub struct GCMessageQueueEntry {
+    /// Properties of the message, such as length and type
+    pub props: RecvMessageProperties,
+
+    /// The buffer containing the actual message's contents
+    pub buffer: Vec<u8>,
+
+    /// If true, an error happened while receiving and the other fields are not valid
+    error: bool
+}
+
+/// A high level message queue to assist in receiving GC messages easily
+pub struct GCMessageQueue<Manager> {
+    /// Receives messages from the callback
+    receiver: mpsc::Receiver<GCMessageQueueEntry>,
+
+    /// A reference to the gc instance
+    client: Client<Manager>,
+
+    /// A reference to the callback registered for the message queue
+    callback: Option<CallbackHandle<Manager>>
+}
+
+impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
+    /// Create a new message queue for a client
+    pub fn new(client: Client<Manager>) -> Self {
+        let (sender, receiver) = mpsc::channel::<GCMessageQueueEntry>();
+
+        // create the queue
+        let mut obj = Self {
+            receiver,
+            client,
+            callback: None,
+        };
+
+        // register a callback to service this queue
+        obj.start_recv(sender);
+
+        return obj
+    }
+
+    /// Begin receiving GC packets into the queue
+    fn start_recv(&mut self, sender: mpsc::Sender<GCMessageQueueEntry>)
+    {
+        // get a gc reference
+        let gc = self.client.gc();
+
+        let callback = move |v: GCMessageAvailable| {
+            // receive the message from the queue and ensure
+            let mut buf: Vec<u8> = Vec::with_capacity(v.message_size as usize);
+            let res = gc.recv_message(&mut buf);
+
+            // did we receive a message?
+            if let Ok(x) = res {
+                // append a message to the queue
+                sender.send(GCMessageQueueEntry {
+                    props: x,
+                    buffer: buf,
+                    error: false
+                }).unwrap_or_default()
+            } else {
+                // we lost gc connection, alert the receiver
+                sender.send(GCMessageQueueEntry {
+                    props: RecvMessageProperties{
+                        msg_type: 0,
+                        msg_size: 0,
+                    },
+                    buffer: Vec::new(),
+                    error: true
+                }).unwrap_or_default()
+            }
+        };
+
+        // register the callback and hold a reference to it
+        self.callback = Some(self.client.register_callback(callback));
+    }
+
+    /// Add a message to send to the queue. Returns true if the message was successfully queued.
+    /// The message data must NOT include the 8-byte header. This is added automatically.
+    pub fn send_message(&self, msg_type: u32, msg_data: &[u8]) -> bool
+    {
+        let gc = self.client.gc();
+        let res = gc.send_message(msg_type, msg_data);
+        if let Ok(_) = res {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Block until a message is becomes available in the queue
+    /// If a message cannot be received or the timeout is reached, returns None.
+    /// Otherwise, returns Ok(GCMessageQueueEntry) containing the message.
+    pub fn recv_message_sync(&self, timeout: Duration) -> Option<GCMessageQueueEntry>
+    {
+        // block and receive a message from the mpsc queue
+        match self.receiver.recv_timeout(timeout) {
+            // did the mpsc queue fail or time out?
+            Err(_) => None,
+
+            // we received a message
+            Ok(t) => {
+                // was the producer alerting us that an errored happened?
+                if t.error {
+                    // let the consumer know there's an error
+                    None
+                } else {
+                    // otherwise it's valid message
+                    Some(t)
+                }
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct GCMessageAvailable {
     pub message_size: u32,
 }
 
+const CALLBACK_BASE: i32 = 1700;
+
+/// Callback object to track when a GC message is available in the queue
 unsafe impl Callback for GCMessageAvailable {
-    const ID: i32 = CALLBACK_BASE_ID + 1;
+    const ID: i32 = CALLBACK_BASE + 1;
     const SIZE: i32 = ::std::mem::size_of::<sys::GCMessageAvailable_t>() as i32;
 
     unsafe fn from_raw(raw: *mut libc::c_void) -> Self {
@@ -169,12 +289,12 @@ unsafe impl Callback for GCMessageAvailable {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct GCMessageFailed {
 }
 
+/// Callback object to track when a GC message failed to send/recv
 unsafe impl Callback for GCMessageFailed {
-    const ID: i32 = CALLBACK_BASE_ID + 2;
+    const ID: i32 = CALLBACK_BASE + 2;
     const SIZE: i32 = ::std::mem::size_of::<sys::GCMessageFailed_t>() as i32;
 
     unsafe fn from_raw(_raw: *mut libc::c_void) -> Self {
@@ -182,6 +302,11 @@ unsafe impl Callback for GCMessageFailed {
         }
     }
 }
+
+#[cfg(test)]
+const CLIENT_HELLO_MESSAGE_ID: u32 = 0x80000000 + 4006;
+#[cfg(test)]
+const CLIENT_WELCOME_MESSAGE_ID: u32 = 0x80000000 + 4004;
 
 #[test]
 #[serial]
@@ -222,8 +347,8 @@ fn test() {
     }
 
     // send a GC hello
-    let res = gc.send_message(0x80000000 + 4006, &[]);
-    dbg!(res);
+    let res = gc.send_message(CLIENT_HELLO_MESSAGE_ID, &[]);
+    dbg!(res.unwrap());
 
     // run some more callbacks waiting for the GC welcome
     for _ in 0 .. 20 {
@@ -231,4 +356,41 @@ fn test() {
         ::std::thread::sleep(::std::time::Duration::from_millis(50));
     }
 
+}
+
+#[test]
+#[serial]
+fn test_queue() {
+    // ensure we can connect to a client and create a gc interface
+    let (client, single) = Client::init().unwrap();
+
+    // let steam warm up
+    ::std::thread::sleep(::std::time::Duration::from_millis(1000));
+
+    // spawn a thread to do send/recv operations
+    let _ = std::thread::spawn(move || {
+        let queue = GCMessageQueue::new(client.clone());
+
+        // first, try to produce a timeout
+        let msg = queue.recv_message_sync(Duration::from_millis(100));
+        assert!(msg.is_none());
+
+        // next, send a k_EMsgGCClientHello
+        dbg!(queue.send_message(CLIENT_HELLO_MESSAGE_ID, &[]));
+
+        // we will expect a response from the GC in a reasonable time
+        let msg = queue.recv_message_sync(Duration::from_millis(500));
+
+        // assert that we received a message...
+        assert!(msg.is_some());
+
+        // ... and that the message is a k_EMsgGCClientWelcome, verifying the handshake was successful
+        assert_eq!(msg.unwrap().props.msg_type, CLIENT_WELCOME_MESSAGE_ID)
+    });
+
+    // loop performing callbacks here
+    for _ in 0 .. 20 {
+        single.run_callbacks();
+        ::std::thread::sleep(::std::time::Duration::from_millis(50));
+    }
 }
