@@ -173,6 +173,27 @@ pub struct GCMessageQueue<Manager> {
     packet_callbacks: Arc<Mutex<HashMap<u32, Box<dyn FnMut(GCMessageQueueEntry) + Send + 'static>>>>
 }
 
+/// Handle representing a callback that will be dropped automatically
+pub struct PktCallbackHandle {
+    msg_type: u32,
+    packet_callbacks: Arc<Mutex<HashMap<u32, Box<dyn FnMut(GCMessageQueueEntry) + Send + 'static>>>>
+}
+
+/// Implements automatic drop for install_callback_handle
+impl Drop for PktCallbackHandle {
+    fn drop(&mut self) {
+        println!("Dropped!");
+        match self.packet_callbacks.lock()
+        {
+            // remove the callback from the table if the reference is valid
+            Ok(mut cbs) => { cbs.remove(&self.msg_type); },
+            // danging reference to a dropped queue, do nothing.
+            Err(_) => {}
+        }
+        ()
+    }
+}
+
 impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
     /// Create a new message queue for a client
     pub fn new(client: Client<Manager>) -> Self {
@@ -251,12 +272,36 @@ impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
         }
     }
 
-    /// Establish a callback function to call whenever a packet of a certain type is received
-    /// Only one callback for a specific message type can exist per queue
-    pub fn install_callback<C>(&self, msg_type: u32, callback_fn: C)
+    /// Establish a permanent callback function to call whenever a packet of a certain type is received
+    ///
+    /// Only one callback for a specific message type can exist per queue, if one already exists
+    /// the callback is replaced with this one.
+    pub fn install_global_callback<C>(&self, msg_type: u32, callback_fn: C)
         where C: FnMut(GCMessageQueueEntry) + Send + 'static
     {
         self.packet_callbacks.lock().unwrap().insert(msg_type, Box::new(callback_fn));
+    }
+
+    /// Establish a temporary callback function to call whenever a packet of a certain type is received.
+    /// This is used to establish a callback function for a packet type which only exists in the scope
+    /// of the returned handle.
+    ///
+    /// Only one callback for a specific message type can exist per queue, if one already exists
+    /// the callback is replaced with this one.
+    ///
+    /// Returns a handle object which, when dropped, will remove the callback type specified by msg_type.
+    /// NOTE: this does not protect against races by other calls to install_handle.
+    pub fn install_callback<C>(&self, msg_type: u32, callback_fn: C) -> PktCallbackHandle
+        where C: FnMut(GCMessageQueueEntry) + Send + 'static
+    {
+        let mut guard = self.packet_callbacks.lock().unwrap();
+        guard.insert(msg_type, Box::new(callback_fn));
+
+        // return a handle which will automatically drop the callback type
+        PktCallbackHandle {
+            msg_type,
+            packet_callbacks: self.packet_callbacks.clone()
+        }
     }
 
     /// Removes a previously registered callback by its message type
@@ -374,7 +419,7 @@ fn test_queue() {
         let queue = GCMessageQueue::new(client.clone());
 
         // install a callback to respond for the welcome packet
-        queue.install_callback(CLIENT_WELCOME_MESSAGE_ID, move |pkt| {
+        queue.install_global_callback(CLIENT_WELCOME_MESSAGE_ID, move |pkt| {
             dbg!(&pkt.props);
             // tell the test thread that we were successful
             sender.send(true).unwrap();
@@ -396,6 +441,58 @@ fn test_queue() {
         if let Ok(_) = receiver.try_recv()
         {
             // successfully received the message, exit test
+            return
+        }
+    }
+
+    panic!("Did not receive GC welcome packet.");
+}
+
+#[test]
+#[serial]
+fn test_callback_handle() {
+    // ensure we can connect to a client and create a gc interface
+    let (client, single) = Client::init().unwrap();
+
+    // let steam warm up
+    ::std::thread::sleep(::std::time::Duration::from_millis(1000));
+
+    // notify us when the message is successfully received in the other thread
+    let (sender, receiver) = std::sync::mpsc::channel::<bool>();
+
+    // spawn a thread to do send/recv operations
+    let other_thrd = std::thread::spawn(move || {
+        let queue = GCMessageQueue::new(client.clone());
+
+        {
+            // install a callback to respond for the welcome packet
+            let _hndl = queue.install_callback(CLIENT_WELCOME_MESSAGE_ID, move |pkt| {
+                dbg!(&pkt.props);
+                // tell the test thread that we were successful
+                sender.send(true).unwrap();
+            });
+
+            // send a k_EMsgGCClientHello
+            dbg!(queue.send_message(CLIENT_HELLO_MESSAGE_ID, &[]));
+
+            // keep the thread and queue alive
+            ::std::thread::sleep(::std::time::Duration::from_millis(1000));
+        }
+
+        // ensure our callback was dropped
+        assert_eq!(queue.packet_callbacks.lock().unwrap().len(), 0);
+    });
+
+    // loop performing callbacks here
+    for _ in 0 .. 50 {
+        single.run_callbacks();
+        ::std::thread::sleep(::std::time::Duration::from_millis(50));
+
+        // did the packet successfully get received?
+        if let Ok(_) = receiver.try_recv()
+        {
+            // successfully received the message, exit test
+            other_thrd.join();
             return
         }
     }
