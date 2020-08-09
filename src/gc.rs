@@ -182,7 +182,6 @@ pub struct PktCallbackHandle {
 /// Implements automatic drop for install_callback_handle
 impl Drop for PktCallbackHandle {
     fn drop(&mut self) {
-        println!("Dropped!");
         match self.packet_callbacks.lock()
         {
             // remove the callback from the table if the reference is valid
