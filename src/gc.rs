@@ -291,6 +291,7 @@ impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
     ///
     /// Returns a handle object which, when dropped, will remove the callback type specified by msg_type.
     /// NOTE: this does not protect against races by other calls to install_handle.
+    #[must_use]
     pub fn install_callback<C>(&self, msg_type: u32, callback_fn: C) -> PktCallbackHandle
         where C: FnMut(GCMessageQueueEntry) + Send + 'static
     {
