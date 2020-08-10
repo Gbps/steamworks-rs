@@ -1,4 +1,5 @@
 use super::*;
+use pretty_hex::*;
 
 #[cfg(test)]
 use serial_test_derive::serial;
@@ -77,7 +78,8 @@ impl <Manager> GC<Manager> {
         temp_vec.extend_from_slice(msg_data);
 
         unsafe {
-            println!("[DBG] Send packet {} (len={})", msg_type & 0x7FFFFFFF, msg_data.len() as u32);
+            println!("[DBG] Send packet 0x{:8x} (len={})", msg_type, msg_data.len() as u32);
+            println!("{:?}", msg_data.hex_dump());
 
             // Call into ISteamGameCoordinator to send the message
             let res = ((*self.get_vtable()).send_message)(self.gc, msg_type, temp_vec.as_ptr(), temp_vec.len() as u32);
