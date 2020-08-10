@@ -108,7 +108,6 @@ impl <Manager> GC<Manager> {
             // keep trying until we get the buffer size right
             loop {
                 // attempt to receive the message
-                println!("calling retrieve_message");
                 let res = ((*self.get_vtable()).retrieve_message)(self.gc, &mut props.msg_type, out_vec.as_mut_ptr(), out_vec.capacity() as u32, &mut props.msg_size);
 
                 // if we got the message into the vector
@@ -125,7 +124,7 @@ impl <Manager> GC<Manager> {
                         // notice that RetrieveMessage knows the correct size of the message but will NOT return you
                         // that value until you pass a buffer large enough... so we just have to keep growing and hope it works
                         // stupid stupid stupid api design
-                        out_vec.reserve(out_vec.capacity());
+                        out_vec.reserve(out_vec.capacity() * 2);
                     } else {
                         // otherwise we actually have a real error
                         return Err(res)
