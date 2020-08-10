@@ -220,6 +220,7 @@ impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
             // receive the message from the queue and ensure
             let mut buf: Vec<u8> = Vec::with_capacity(v.message_size as usize);
             let res = gc.recv_message(&mut buf);
+            dbg!(&res);
 
             // did we receive a message?
             if let Ok(x) = res {
