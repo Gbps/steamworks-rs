@@ -77,7 +77,7 @@ impl <Manager> GC<Manager> {
         temp_vec.extend_from_slice(msg_data);
 
         unsafe {
-            println!("[DBG] Send packet {:08x} (len={})", msg_type & 0x7FFFFFFF, msg_data.len() as u32);
+            println!("[DBG] Send packet {} (len={})", msg_type & 0x7FFFFFFF, msg_data.len() as u32);
 
             // Call into ISteamGameCoordinator to send the message
             let res = ((*self.get_vtable()).send_message)(self.gc, msg_type, temp_vec.as_ptr(), temp_vec.len() as u32);
@@ -225,7 +225,7 @@ impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
 
             // did we receive a message?
             if let Ok(x) = res {
-                println!("[DBG] Received packet {:08x}", x.msg_type & 0x7FFFFFFF);
+                println!("[DBG] Received packet {}", x.msg_type & 0x7FFFFFFF);
 
                 // okay, let's fire a callback for that type
                 if let Ok(mut ht) = callbacks_ref.lock()
