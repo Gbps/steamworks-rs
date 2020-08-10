@@ -108,6 +108,7 @@ impl <Manager> GC<Manager> {
             // keep trying until we get the buffer size right
             loop {
                 // attempt to receive the message
+                println!("calling retrieve_message");
                 let res = ((*self.get_vtable()).retrieve_message)(self.gc, &mut props.msg_type, out_vec.as_mut_ptr(), out_vec.capacity() as u32, &mut props.msg_size);
 
                 // if we got the message into the vector
