@@ -74,7 +74,8 @@ impl <Manager> GC<Manager> {
         // Write out the header to a temp buffer before sending off
         let mut temp_vec: Vec<u8> = Vec::with_capacity(msg_data.len() + 8);
         temp_vec.write_u32::<LittleEndian>(msg_type).unwrap();
-        temp_vec.write_u32::<LittleEndian>(msg_data.len() as u32).unwrap();
+        // no protobuf header (yet)
+        temp_vec.write_u32::<LittleEndian>(0).unwrap();
         temp_vec.extend_from_slice(msg_data);
 
         unsafe {
