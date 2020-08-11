@@ -40,19 +40,19 @@ struct IGameCoordinator_vtable {
     /// virtual EGCResults SendMessage( uint32 unMsgType, const void *pubData, uint32 cubData ) = 0;
     #[cfg(all(windows, target_pointer_width = "32"))]
     send_message: extern "thiscall" fn(c: *mut sys::ISteamGameCoordinator, unMsgType: u32, pubData: *const u8, cubData: u32) -> sys::EGCResults,
-    #[cfg(not(windows))]
+    #[cfg(not(all(windows, target_pointer_width = "32")))]
     send_message: extern "C" fn(c: *mut sys::ISteamGameCoordinator, unMsgType: u32, pubData: *const u8, cubData: u32) -> sys::EGCResults,
 
     /// virtual bool IsMessageAvailable( uint32 *pcubMsgSize ) = 0;
     #[cfg(all(windows, target_pointer_width = "32"))]
     is_message_available: extern "thiscall" fn(c: *mut sys::ISteamGameCoordinator, pcubMsgSize: *mut u32) -> bool,
-    #[cfg(not(windows))]
+    #[cfg(not(all(windows, target_pointer_width = "32")))]
     is_message_available: extern "C" fn(c: *mut sys::ISteamGameCoordinator, pcubMsgSize: *mut u32) -> bool,
 
     /// virtual EGCResults RetrieveMessage( uint32 *punMsgType, void *pubDest, uint32 cubDest, uint32 *pcubMsgSize ) = 0;
     #[cfg(all(windows, target_pointer_width = "32"))]
     retrieve_message: extern "thiscall" fn(c: *mut sys::ISteamGameCoordinator, punMsgType: *mut u32, pubDest: *mut u8, cubDest: u32, pcubMsgSize: *mut u32) -> sys::EGCResults,
-    #[cfg(not(windows))]
+    #[cfg(not(all(windows, target_pointer_width = "32")))]
     retrieve_message: extern "C" fn(c: *mut sys::ISteamGameCoordinator, punMsgType: *mut u32, pubDest: *mut u8, cubDest: u32, pcubMsgSize: *mut u32) -> sys::EGCResults,
 }
 
