@@ -79,9 +79,6 @@ impl <Manager> GC<Manager> {
         temp_vec.extend_from_slice(msg_data);
 
         unsafe {
-            println!("[DBG] Send packet 0x{:8x} (len={})", msg_type, temp_vec.len() as u32);
-            println!("{:?}", temp_vec.hex_dump());
-
             // Call into ISteamGameCoordinator to send the message
             let res = ((*self.get_vtable()).send_message)(self.gc, msg_type, temp_vec.as_ptr(), temp_vec.len() as u32);
             if res == sys::EGCResults::k_EGCResultOK {
@@ -271,24 +268,14 @@ impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
                         cb(GCMessageQueueEntry {
                             props: x,
                             header,
-                            body: body,
+                            body,
                             error: false
                         });
                     }
                 }
             } else {
-                // we lost gc connection, alert the receiver
-                /*
-                sender.send(GCMessageQueueEntry {
-                    props: RecvMessageProperties{
-                        msg_type: 0,
-                        msg_size: 0,
-                    },
-                    buffer: Vec::new(),
-                    error: true
-                }).unwrap_or_default(
-                */
-
+                // TODO: Error report
+                return;
             }
         };
 
