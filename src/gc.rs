@@ -4,7 +4,7 @@ use pretty_hex::*;
 #[cfg(test)]
 use serial_test_derive::serial;
 
-use byteorder::{LittleEndian, WriteBytesExt};
+use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 
 pub type GCResult<T> = Result<T, sys::EGCResults>;
 
@@ -159,12 +159,17 @@ pub struct GCMessageQueueEntry {
     /// Properties of the message, such as length and type
     pub props: RecvMessageProperties,
 
+    /// The buffer containing the optional header, if present
+    pub header: Option<Vec<u8>>,
+
     /// The buffer containing the actual message's contents
-    pub buffer: Vec<u8>,
+    pub body: Vec<u8>,
 
     /// If true, an error happened while receiving and the other fields are not valid
     error: bool
 }
+
+type PacketCallbacksTable = Arc<Mutex<HashMap<u32, Box<dyn FnMut(GCMessageQueueEntry) + Send + 'static>>>>;
 
 /// A high level message queue to assist in receiving GC messages easily
 pub struct GCMessageQueue<Manager> {
@@ -175,13 +180,13 @@ pub struct GCMessageQueue<Manager> {
     callback: Option<CallbackHandle<Manager>>,
 
     /// Hashmap which dispatches message id types to callbacks that service them
-    packet_callbacks: Arc<Mutex<HashMap<u32, Box<dyn FnMut(GCMessageQueueEntry) + Send + 'static>>>>
+    packet_callbacks: PacketCallbacksTable
 }
 
 /// Handle representing a callback that will be dropped automatically
 pub struct PktCallbackHandle {
     msg_type: u32,
-    packet_callbacks: Arc<Mutex<HashMap<u32, Box<dyn FnMut(GCMessageQueueEntry) + Send + 'static>>>>
+    packet_callbacks: PacketCallbacksTable
 }
 
 /// Implements automatic drop for install_callback_handle
@@ -228,7 +233,32 @@ impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
 
             // did we receive a message?
             if let Ok(x) = res {
-                println!("[DBG] Received packet {}", x.msg_type & 0x7FFFFFFF);
+                // parse the size of the optional proto header
+                let mut header_size = &buf[4..8];
+                let header_size = header_size.read_u32::<LittleEndian>();
+                let header_size = match header_size {
+                    Err(_) => return,
+                    Ok(x) => x
+                } as usize;
+
+                let mut header: Option<Vec<u8>> = None;
+                let body: Vec<u8>;
+
+                // is there an optional header?
+                if header_size > 0 {
+                    // read the header separately
+                    let hdr = Vec::from(&buf[8..(8+header_size)]);
+                    println!("[DBG] Header size: {}", hdr.len());
+                    header = Some(hdr);
+
+                    // read the body afterwards
+                    body = Vec::from(&buf[(8+header_size)..]);
+                    println!("[DBG] Body size: {}", body.len());
+                }
+                else {
+                    // otherwise, just read the body since the header is 0
+                    body = Vec::from(&buf[8..]);
+                }
 
                 // okay, let's fire a callback for that type
                 if let Ok(mut ht) = callbacks_ref.lock()
@@ -240,7 +270,8 @@ impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
                         let cb = entry.unwrap();
                         cb(GCMessageQueueEntry {
                             props: x,
-                            buffer: buf,
+                            header,
+                            body: body,
                             error: false
                         });
                     }
@@ -361,7 +392,7 @@ const CLIENT_WELCOME_MESSAGE_ID: u32 = 0x80000000 + 4004;
 
 #[test]
 #[serial]
-fn test() {
+fn test_basic() {
     // ensure we can connect to a client and create a gc interface
     let (client, single) = Client::init().unwrap();
     let gc = client.gc();
