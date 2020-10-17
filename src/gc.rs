@@ -245,12 +245,10 @@ impl<Manager: 'static> GCMessageQueue<Manager> where Manager: crate::Manager {
                 if header_size > 0 {
                     // read the header separately
                     let hdr = Vec::from(&buf[8..(8+header_size)]);
-                    println!("[DBG] Header size: {}", hdr.len());
                     header = Some(hdr);
 
                     // read the body afterwards
                     body = Vec::from(&buf[(8+header_size)..]);
-                    println!("[DBG] Body size: {}", body.len());
                 }
                 else {
                     // otherwise, just read the body since the header is 0
